@@ -1,0 +1,85 @@
+LJCOMPILE=cl /nologo /c /O2 /W3 /D_CRT_SECURE_NO_DEPRECATE -Zi  /MT
+LJLINK=link /nologo -nodefaultlib libcmt.lib vcruntime.lib ucrt.lib kernel32.lib user32.lib advapi32.lib -debug:full
+LJMT=mt /nologo
+LJLIB=lib /nologo -nodefaultlib 
+DASMDIR=..\dynasm
+DASM=$(DASMDIR)\dynasm.lua
+LJDLLNAME=lua51.dll
+LJLIBNAME=lua51.lib
+ALL_LIB=lib_base.c lib_math.c lib_bit.c lib_string.c lib_table.c lib_io.c lib_os.c lib_package.c lib_debug.c lib_jit.c lib_ffi.c
+
+!if "$(PROCESSOR_ARCHITECTURE)" == "AMD64"
+DASMFLAGS=-D WIN -D JIT -D FFI -D P64
+LJARCH=x64
+!else
+DASMFLAGS=-D WIN -D JIT -D FFI
+LJARCH=x86
+!endif
+
+OUTDIR = out 
+!INCLUDE objlist.mak
+
+all: mtdll $(OUTDIR)\luajit.exe
+
+outdir:
+	-mkdir $(OUTDIR)
+	-mkdir $(OUTDIR)\static
+
+clean:
+	-del /q out
+	-del /q out\static
+	-del minilua.exe buildvm.exe host\buildvm_arch.h
+	-del lj_bcdef.h lj_ffdef.h lj_libdef.h lj_recdef.h lj_folddef.h
+
+
+minilua.exe: outdir $(OUTDIR)\minilua.obj
+	$(LJLINK) /out:minilua.exe $(OUTDIR)\minilua.obj
+
+dasm: minilua.exe
+	minilua $(DASM) -LN $(DASMFLAGS) -o host\buildvm_arch.h vm_x86.dasc
+
+$(OUTDIR)\buildvm.exe:  dasm
+	$(LJCOMPILE) /I "." /I -Fo$(OUTDIR)\$*.obj -Fd$*.pdb -I $(DASMDIR) host\buildvm*.c
+	$(LJLINK) /out:$(OUTDIR)\buildvm.exe buildvm*.obj
+
+vms:$(OUTDIR)\buildvm.exe
+	$(OUTDIR)\buildvm -m peobj -o lj_vm.obj
+	$(OUTDIR)\buildvm -m bcdef -o lj_bcdef.h $(ALL_LIB)
+	$(OUTDIR)\buildvm -m ffdef -o lj_ffdef.h $(ALL_LIB)
+	$(OUTDIR)\buildvm -m libdef -o lj_libdef.h $(ALL_LIB)
+	$(OUTDIR)\buildvm -m recdef -o lj_recdef.h $(ALL_LIB)
+	$(OUTDIR)\buildvm -m vmdef -o jit\vmdef.lua $(ALL_LIB)
+	$(OUTDIR)\buildvm -m folddef -o lj_folddef.h lj_opt_fold.c
+
+mtdll:  vms  $(OBJLIST) 
+	$(LJLINK) /OUT:$(OUTDIR)\$(LJDLLNAME) /DLL lj_vm.obj $(OBJLIST) /pdb:$(OUTDIR)\lua51.pdb 
+
+static:  vms  $(OBJ_SLIST) 
+	$(LJLIB) /OUT:$(OUTDIR)\static\$(LJLIBNAME) lj_vm.obj 
+
+$(OUTDIR)\luajit.exe:   $(OUTDIR)\static\luajit.obj static
+	$(LJLINK) $(OBJ_SLIST) $(OUTDIR)\static\$(LJLIBNAME) $(OUTDIR)\static\luajit.obj /out:$(OUTDIR)\luajit.exe lj_vm.obj /pdb:$(OUTDIR)\luajit.pdb
+
+
+install: 
+	copy lauxlib.h ..\install\include\luajit-2.0\ 
+	copy lua.h ..\install\include\luajit-2.0\ 
+	copy lua.hpp ..\install\include\luajit-2.0\ 
+	copy luaconf.h ..\install\include\luajit-2.0\ 
+	copy luajit.h ..\install\include\luajit-2.0\ 
+	copy lualib.h ..\install\include\luajit-2.0\ 
+	copy out\lua51.lib ..\install\lib\ 
+	copy out\lua51.dll ..\install\bin\ 
+	copy out\lua51.pdb ..\install\bin\ 
+
+.c{$(OUTDIR)\}.obj:
+	$(LJCOMPILE) -Fo$*.obj -DLUA_BUILD_AS_DLL $<
+
+.c{$(OUTDIR)\static\}.obj:
+	$(LJCOMPILE) -Fo$*.obj $<
+
+{host\}.c{$(OUTDIR)\}.obj:
+	$(LJCOMPILE) -Fo$*.obj -DLUA_BUILD_AS_DLL  $<
+
+{host\}.c{$(OUTDIR)\static\}.obj:
+	$(LJCOMPILE) -Fo$*.obj $<
